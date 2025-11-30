@@ -2,7 +2,7 @@
 Task-related tools for Amplenote MCP Server.
 """
 
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
 import json
 from pydantic import ValidationError
@@ -291,6 +291,249 @@ class TasksService:
                 "is_scheduled_bullet": False if row[11] == 0 else True,
                 "parent_uuid": row[12],
             })
+
+        conn.close()
+        return results
+
+    def get_tasks_by_created_date(
+        self,
+        start_date: Optional[int] = None,
+        end_date: Optional[int] = None,
+        limit: int = 20,
+        include_deleted: bool = False,
+        include_done: bool = False
+    ) -> list[Task]:
+        """
+        Get tasks filtered by creation date from the attrs JSON field.
+
+        Args:
+            start_date: Unix timestamp for start of date range (inclusive)
+            end_date: Unix timestamp for end of date range (inclusive)
+            limit: Maximum number of tasks to return (default: 20)
+            include_deleted: Whether to include deleted tasks (default: False)
+            include_done: Whether to include completed tasks (default: False)
+
+        Returns:
+            List of tasks created within the date range, ordered by creation date descending
+        """
+        conn = self.db_connection.get_connection()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT
+              id, uuid, local_uuid, remote_uuid, deleted, calendar_sync_required, notify_at, attrs,
+              content, due, done, is_scheduled_bullet, parent_uuid
+            FROM tasks
+            WHERE attrs IS NOT NULL
+        """
+        params = []
+
+        if not include_deleted:
+            query += " AND (deleted IS NULL OR deleted = 0)"
+
+        if not include_done:
+            query += " AND (done IS NULL OR done = 0)"
+
+        cursor.execute(query, params)
+
+        # Post-process to filter by creation date from JSON
+        results = []
+        for row in cursor.fetchall():
+            attrs = self._parse_task_attrs(row[7])
+
+            # Skip if attrs parsing failed or no created_at
+            if not attrs or attrs.created_at is None:
+                continue
+
+            # Apply date range filters
+            if start_date is not None and attrs.created_at < start_date:
+                continue
+            if end_date is not None and attrs.created_at > end_date:
+                continue
+
+            results.append({
+                "id": row[0],
+                "uuid": row[1],
+                "local_uuid": row[2],
+                "remote_uuid": row[3],
+                "deleted": False if row[4] == 0 else True,
+                "calendar_sync_required": False if row[5] == 0 else True,
+                "notify_at": None if row[6] is None or row[6] == 0 else datetime.fromtimestamp(row[6]),
+                "attrs": attrs,
+                "content": self._parse_task_content(row[8]),
+                "due": None if row[9] is None or row[9] == 0 else datetime.fromtimestamp(row[9]),
+                "done": False if row[10] == 0 else True,
+                "is_scheduled_bullet": False if row[11] == 0 else True,
+                "parent_uuid": row[12],
+            })
+
+        # Sort by creation date descending (most recent first)
+        results.sort(key=lambda x: x["attrs"].created_at if x["attrs"] else 0, reverse=True)
+
+        # Apply limit
+        results = results[:limit]
+
+        conn.close()
+        return results
+
+    def get_tasks_ordered_by_points(
+        self,
+        limit: int = 20,
+        include_deleted: bool = False,
+        include_done: bool = False,
+        ascending: bool = False
+    ) -> list[Task]:
+        """
+        Get tasks ordered by their point values from the attrs JSON field.
+
+        Args:
+            limit: Maximum number of tasks to return (default: 20)
+            include_deleted: Whether to include deleted tasks (default: False)
+            include_done: Whether to include completed tasks (default: False)
+            ascending: Sort order - True for ascending, False for descending (default: False)
+
+        Returns:
+            List of tasks ordered by points
+        """
+        conn = self.db_connection.get_connection()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT
+              id, uuid, local_uuid, remote_uuid, deleted, calendar_sync_required, notify_at, attrs,
+              content, due, done, is_scheduled_bullet, parent_uuid
+            FROM tasks
+            WHERE attrs IS NOT NULL
+        """
+        params = []
+
+        if not include_deleted:
+            query += " AND (deleted IS NULL OR deleted = 0)"
+
+        if not include_done:
+            query += " AND (done IS NULL OR done = 0)"
+
+        cursor.execute(query, params)
+
+        # Post-process to extract and sort by points
+        results = []
+        for row in cursor.fetchall():
+            attrs = self._parse_task_attrs(row[7])
+
+            # Skip if attrs parsing failed or no points
+            if not attrs or attrs.points is None:
+                continue
+
+            results.append({
+                "id": row[0],
+                "uuid": row[1],
+                "local_uuid": row[2],
+                "remote_uuid": row[3],
+                "deleted": False if row[4] == 0 else True,
+                "calendar_sync_required": False if row[5] == 0 else True,
+                "notify_at": None if row[6] is None or row[6] == 0 else datetime.fromtimestamp(row[6]),
+                "attrs": attrs,
+                "content": self._parse_task_content(row[8]),
+                "due": None if row[9] is None or row[9] == 0 else datetime.fromtimestamp(row[9]),
+                "done": False if row[10] == 0 else True,
+                "is_scheduled_bullet": False if row[11] == 0 else True,
+                "parent_uuid": row[12],
+            })
+
+        # Sort by points
+        results.sort(key=lambda x: x["attrs"].points if x["attrs"] else 0, reverse=not ascending)
+
+        # Apply limit
+        results = results[:limit]
+
+        conn.close()
+        return results
+
+    def get_tasks_by_priority_flags(
+        self,
+        priority_filter: Literal["urgent", "important", "both", "none"],
+        limit: int = 20,
+        include_deleted: bool = False,
+        include_done: bool = False
+    ) -> list[Task]:
+        """
+        Get tasks filtered by priority flags (urgent, important) from the attrs JSON field.
+
+        Args:
+            priority_filter: Filter type:
+                - "urgent": Tasks with U flag only (not I)
+                - "important": Tasks with I flag only (not U)
+                - "both": Tasks with both I and U flags
+                - "none": Tasks with neither I nor U flags
+            limit: Maximum number of tasks to return (default: 20)
+            include_deleted: Whether to include deleted tasks (default: False)
+            include_done: Whether to include completed tasks (default: False)
+
+        Returns:
+            List of tasks matching the priority filter criteria
+        """
+        conn = self.db_connection.get_connection()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT
+              id, uuid, local_uuid, remote_uuid, deleted, calendar_sync_required, notify_at, attrs,
+              content, due, done, is_scheduled_bullet, parent_uuid
+            FROM tasks
+            WHERE 1=1
+        """
+        params = []
+
+        if not include_deleted:
+            query += " AND (deleted IS NULL OR deleted = 0)"
+
+        if not include_done:
+            query += " AND (done IS NULL OR done = 0)"
+
+        cursor.execute(query, params)
+
+        # Post-process to filter by flags
+        results = []
+        for row in cursor.fetchall():
+            attrs = self._parse_task_attrs(row[7])
+
+            # Check flags
+            flags = attrs.flags if attrs and attrs.flags else ""
+            has_urgent = "U" in flags
+            has_important = "I" in flags
+
+            # Apply priority filter
+            should_include = False
+            if priority_filter == "urgent":
+                should_include = has_urgent and not has_important
+            elif priority_filter == "important":
+                should_include = has_important and not has_urgent
+            elif priority_filter == "both":
+                should_include = has_urgent and has_important
+            elif priority_filter == "none":
+                should_include = not has_urgent and not has_important
+
+            if not should_include:
+                continue
+
+            results.append({
+                "id": row[0],
+                "uuid": row[1],
+                "local_uuid": row[2],
+                "remote_uuid": row[3],
+                "deleted": False if row[4] == 0 else True,
+                "calendar_sync_required": False if row[5] == 0 else True,
+                "notify_at": None if row[6] is None or row[6] == 0 else datetime.fromtimestamp(row[6]),
+                "attrs": attrs,
+                "content": self._parse_task_content(row[8]),
+                "due": None if row[9] is None or row[9] == 0 else datetime.fromtimestamp(row[9]),
+                "done": False if row[10] == 0 else True,
+                "is_scheduled_bullet": False if row[11] == 0 else True,
+                "parent_uuid": row[12],
+            })
+
+        # Apply limit
+        results = results[:limit]
 
         conn.close()
         return results

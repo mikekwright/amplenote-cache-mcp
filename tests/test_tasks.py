@@ -353,3 +353,686 @@ def test_parse_invalid_json():
     # Test None values
     assert TasksService._parse_task_content(None) is None
     assert TasksService._parse_task_attrs(None) is None
+
+
+# ============================================================================
+# Tests for new task filtering and ordering features
+# ============================================================================
+
+def test_get_tasks_by_created_date():
+    """Test filtering tasks by creation date."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+
+    # Helper function to create a fresh connection with test data
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        test_content = json.dumps([{
+            "type": "paragraph",
+            "content": [{"type": "text", "text": "Task 1"}]
+        }])
+
+        # Task created on Jan 1, 2025
+        attrs1 = json.dumps({"createdAt": 1735689600})
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-1', ?, ?, 0, 0)
+        """, (attrs1, test_content))
+
+        # Task created on Jan 15, 2025
+        attrs2 = json.dumps({"createdAt": 1736899200})
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-2', ?, ?, 0, 0)
+        """, (attrs2, test_content))
+
+        # Task created on Feb 1, 2025
+        attrs3 = json.dumps({"createdAt": 1738368000})
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-3', ?, ?, 0, 0)
+        """, (attrs3, test_content))
+
+        conn.commit()
+        return conn
+
+    # Create mock that returns a fresh connection each time
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Test: Get all tasks (no date filter)
+    results = service.get_tasks_by_created_date(limit=10)
+    assert len(results) == 3
+
+    # Test: Get tasks created after Jan 10, 2025
+    results = service.get_tasks_by_created_date(start_date=1736467200, limit=10)  # 2025-01-10
+    assert len(results) == 2
+    assert all(r["attrs"].created_at >= 1736467200 for r in results)
+
+    # Test: Get tasks created before Jan 20, 2025
+    results = service.get_tasks_by_created_date(end_date=1737331200, limit=10)  # 2025-01-20
+    assert len(results) == 2
+    assert all(r["attrs"].created_at <= 1737331200 for r in results)
+
+    # Test: Get tasks in a specific range
+    results = service.get_tasks_by_created_date(
+        start_date=1735689600,  # 2025-01-01
+        end_date=1737331200,    # 2025-01-20
+        limit=10
+    )
+    assert len(results) == 2
+
+    # Test: Verify sorting (most recent first)
+    results = service.get_tasks_by_created_date(limit=10)
+    for i in range(len(results) - 1):
+        assert results[i]["attrs"].created_at >= results[i + 1]["attrs"].created_at
+
+
+def test_get_tasks_by_created_date_exclude_deleted_done():
+    """Test that creation date filtering respects deleted/done filters."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        test_content = json.dumps([{
+            "type": "paragraph",
+            "content": [{"type": "text", "text": "Task"}]
+        }])
+
+        attrs = json.dumps({"createdAt": 1735689600})
+
+        # Insert normal task
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-1', ?, ?, 0, 0)
+        """, (attrs, test_content))
+
+        # Insert deleted task
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-2', ?, ?, 1, 0)
+        """, (attrs, test_content))
+
+        # Insert done task
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-3', ?, ?, 0, 1)
+        """, (attrs, test_content))
+
+        conn.commit()
+        return conn
+
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Test: Exclude deleted and done (default)
+    results = service.get_tasks_by_created_date(limit=10)
+    assert len(results) == 1
+    assert results[0]["uuid"] == "task-1"
+
+    # Test: Include deleted
+    results = service.get_tasks_by_created_date(include_deleted=True, limit=10)
+    assert len(results) == 2
+
+    # Test: Include done
+    results = service.get_tasks_by_created_date(include_done=True, limit=10)
+    assert len(results) == 2
+
+
+def test_get_tasks_ordered_by_points():
+    """Test ordering tasks by points."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        test_content = json.dumps([{
+            "type": "paragraph",
+            "content": [{"type": "text", "text": "Task"}]
+        }])
+
+        # Insert tasks with different points
+        attrs1 = json.dumps({"createdAt": 1735689600, "points": 5.0})
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-1', ?, ?, 0, 0)
+        """, (attrs1, test_content))
+
+        attrs2 = json.dumps({"createdAt": 1735689600, "points": 15.5})
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-2', ?, ?, 0, 0)
+        """, (attrs2, test_content))
+
+        attrs3 = json.dumps({"createdAt": 1735689600, "points": 10.0})
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-3', ?, ?, 0, 0)
+        """, (attrs3, test_content))
+
+        # Task without points (should be excluded)
+        attrs4 = json.dumps({"createdAt": 1735689600})
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-4', ?, ?, 0, 0)
+        """, (attrs4, test_content))
+
+        conn.commit()
+        return conn
+
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Test: Get tasks ordered by points (descending - default)
+    results = service.get_tasks_ordered_by_points(limit=10)
+    assert len(results) == 3  # task-4 excluded because no points
+    assert results[0]["attrs"].points == 15.5
+    assert results[1]["attrs"].points == 10.0
+    assert results[2]["attrs"].points == 5.0
+
+    # Test: Get tasks ordered by points (ascending)
+    results = service.get_tasks_ordered_by_points(limit=10, ascending=True)
+    assert len(results) == 3
+    assert results[0]["attrs"].points == 5.0
+    assert results[1]["attrs"].points == 10.0
+    assert results[2]["attrs"].points == 15.5
+
+    # Test: Limit works correctly
+    results = service.get_tasks_ordered_by_points(limit=2)
+    assert len(results) == 2
+
+
+def test_get_tasks_ordered_by_points_exclude_deleted_done():
+    """Test that points ordering respects deleted/done filters."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        test_content = json.dumps([{
+            "type": "paragraph",
+            "content": [{"type": "text", "text": "Task"}]
+        }])
+
+        attrs = json.dumps({"createdAt": 1735689600, "points": 10.0})
+
+        # Normal task
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-1', ?, ?, 0, 0)
+        """, (attrs, test_content))
+
+        # Deleted task
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-2', ?, ?, 1, 0)
+        """, (attrs, test_content))
+
+        # Done task
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-3', ?, ?, 0, 1)
+        """, (attrs, test_content))
+
+        conn.commit()
+        return conn
+
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Default excludes deleted and done
+    results = service.get_tasks_ordered_by_points(limit=10)
+    assert len(results) == 1
+
+    # Include deleted
+    results = service.get_tasks_ordered_by_points(include_deleted=True, limit=10)
+    assert len(results) == 2
+
+    # Include done
+    results = service.get_tasks_ordered_by_points(include_done=True, limit=10)
+    assert len(results) == 2
+
+
+def test_get_tasks_by_priority_flags_urgent_only():
+    """Test filtering tasks with urgent flag only."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+
+    mock_db_connection = Mock()
+    conn = sqlite3.connect(":memory:")
+
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY,
+            uuid CHARACTER(36),
+            local_uuid CHARACTER(36),
+            remote_uuid CHARACTER(36),
+            deleted INTEGER DEFAULT 0,
+            calendar_sync_required INTEGER DEFAULT 0,
+            notify_at INTEGER,
+            attrs TEXT,
+            content TEXT,
+            due INTEGER,
+            done INTEGER DEFAULT 0,
+            is_scheduled_bullet INTEGER DEFAULT 0,
+            parent_uuid CHARACTER(36)
+        )
+    """)
+
+    test_content = json.dumps([{
+        "type": "paragraph",
+        "content": [{"type": "text", "text": "Task"}]
+    }])
+
+    # Urgent only
+    attrs_u = json.dumps({"createdAt": 1735689600, "flags": "U"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-urgent', ?, ?, 0, 0)
+    """, (attrs_u, test_content))
+
+    # Important only
+    attrs_i = json.dumps({"createdAt": 1735689600, "flags": "I"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-important', ?, ?, 0, 0)
+    """, (attrs_i, test_content))
+
+    # Both
+    attrs_both = json.dumps({"createdAt": 1735689600, "flags": "IU"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-both', ?, ?, 0, 0)
+    """, (attrs_both, test_content))
+
+    # None
+    attrs_none = json.dumps({"createdAt": 1735689600})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-none', ?, ?, 0, 0)
+    """, (attrs_none, test_content))
+
+    conn.commit()
+    mock_db_connection.get_connection.return_value = conn
+
+    service = TasksService(mock_db_connection)
+
+    # Test: Urgent only
+    results = service.get_tasks_by_priority_flags("urgent", limit=10)
+    assert len(results) == 1
+    assert results[0]["uuid"] == "task-urgent"
+
+    conn.close()
+
+
+def test_get_tasks_by_priority_flags_important_only():
+    """Test filtering tasks with important flag only."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+
+    mock_db_connection = Mock()
+    conn = sqlite3.connect(":memory:")
+
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY,
+            uuid CHARACTER(36),
+            local_uuid CHARACTER(36),
+            remote_uuid CHARACTER(36),
+            deleted INTEGER DEFAULT 0,
+            calendar_sync_required INTEGER DEFAULT 0,
+            notify_at INTEGER,
+            attrs TEXT,
+            content TEXT,
+            due INTEGER,
+            done INTEGER DEFAULT 0,
+            is_scheduled_bullet INTEGER DEFAULT 0,
+            parent_uuid CHARACTER(36)
+        )
+    """)
+
+    test_content = json.dumps([{
+        "type": "paragraph",
+        "content": [{"type": "text", "text": "Task"}]
+    }])
+
+    # Urgent only
+    attrs_u = json.dumps({"createdAt": 1735689600, "flags": "U"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-urgent', ?, ?, 0, 0)
+    """, (attrs_u, test_content))
+
+    # Important only
+    attrs_i = json.dumps({"createdAt": 1735689600, "flags": "I"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-important', ?, ?, 0, 0)
+    """, (attrs_i, test_content))
+
+    # Both
+    attrs_both = json.dumps({"createdAt": 1735689600, "flags": "IU"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-both', ?, ?, 0, 0)
+    """, (attrs_both, test_content))
+
+    conn.commit()
+    mock_db_connection.get_connection.return_value = conn
+
+    service = TasksService(mock_db_connection)
+
+    # Test: Important only
+    results = service.get_tasks_by_priority_flags("important", limit=10)
+    assert len(results) == 1
+    assert results[0]["uuid"] == "task-important"
+
+    conn.close()
+
+
+def test_get_tasks_by_priority_flags_both():
+    """Test filtering tasks with both urgent and important flags."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+
+    mock_db_connection = Mock()
+    conn = sqlite3.connect(":memory:")
+
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY,
+            uuid CHARACTER(36),
+            local_uuid CHARACTER(36),
+            remote_uuid CHARACTER(36),
+            deleted INTEGER DEFAULT 0,
+            calendar_sync_required INTEGER DEFAULT 0,
+            notify_at INTEGER,
+            attrs TEXT,
+            content TEXT,
+            due INTEGER,
+            done INTEGER DEFAULT 0,
+            is_scheduled_bullet INTEGER DEFAULT 0,
+            parent_uuid CHARACTER(36)
+        )
+    """)
+
+    test_content = json.dumps([{
+        "type": "paragraph",
+        "content": [{"type": "text", "text": "Task"}]
+    }])
+
+    # Urgent only
+    attrs_u = json.dumps({"createdAt": 1735689600, "flags": "U"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-urgent', ?, ?, 0, 0)
+    """, (attrs_u, test_content))
+
+    # Both (IU)
+    attrs_both1 = json.dumps({"createdAt": 1735689600, "flags": "IU"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-both-1', ?, ?, 0, 0)
+    """, (attrs_both1, test_content))
+
+    # Both (UI - different order)
+    attrs_both2 = json.dumps({"createdAt": 1735689600, "flags": "UI"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-both-2', ?, ?, 0, 0)
+    """, (attrs_both2, test_content))
+
+    conn.commit()
+    mock_db_connection.get_connection.return_value = conn
+
+    service = TasksService(mock_db_connection)
+
+    # Test: Both flags
+    results = service.get_tasks_by_priority_flags("both", limit=10)
+    assert len(results) == 2
+    assert set(r["uuid"] for r in results) == {"task-both-1", "task-both-2"}
+
+    conn.close()
+
+
+def test_get_tasks_by_priority_flags_none():
+    """Test filtering tasks with no priority flags."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+
+    mock_db_connection = Mock()
+    conn = sqlite3.connect(":memory:")
+
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY,
+            uuid CHARACTER(36),
+            local_uuid CHARACTER(36),
+            remote_uuid CHARACTER(36),
+            deleted INTEGER DEFAULT 0,
+            calendar_sync_required INTEGER DEFAULT 0,
+            notify_at INTEGER,
+            attrs TEXT,
+            content TEXT,
+            due INTEGER,
+            done INTEGER DEFAULT 0,
+            is_scheduled_bullet INTEGER DEFAULT 0,
+            parent_uuid CHARACTER(36)
+        )
+    """)
+
+    test_content = json.dumps([{
+        "type": "paragraph",
+        "content": [{"type": "text", "text": "Task"}]
+    }])
+
+    # Urgent only
+    attrs_u = json.dumps({"createdAt": 1735689600, "flags": "U"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-urgent', ?, ?, 0, 0)
+    """, (attrs_u, test_content))
+
+    # No flags
+    attrs_none1 = json.dumps({"createdAt": 1735689600})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-none-1', ?, ?, 0, 0)
+    """, (attrs_none1, test_content))
+
+    # Empty flags string
+    attrs_none2 = json.dumps({"createdAt": 1735689600, "flags": ""})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-none-2', ?, ?, 0, 0)
+    """, (attrs_none2, test_content))
+
+    # Different flag (D for delegated)
+    attrs_d = json.dumps({"createdAt": 1735689600, "flags": "D"})
+    cursor.execute("""
+        INSERT INTO tasks (uuid, attrs, content, deleted, done)
+        VALUES ('task-delegated', ?, ?, 0, 0)
+    """, (attrs_d, test_content))
+
+    conn.commit()
+    mock_db_connection.get_connection.return_value = conn
+
+    service = TasksService(mock_db_connection)
+
+    # Test: No priority flags
+    results = service.get_tasks_by_priority_flags("none", limit=10)
+    assert len(results) == 3  # none-1, none-2, and delegated
+    assert set(r["uuid"] for r in results) == {"task-none-1", "task-none-2", "task-delegated"}
+
+    conn.close()
+
+
+def test_get_tasks_by_priority_flags_exclude_deleted_done():
+    """Test that priority flag filtering respects deleted/done filters."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        test_content = json.dumps([{
+            "type": "paragraph",
+            "content": [{"type": "text", "text": "Task"}]
+        }])
+
+        attrs = json.dumps({"createdAt": 1735689600, "flags": "U"})
+
+        # Normal task
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-1', ?, ?, 0, 0)
+        """, (attrs, test_content))
+
+        # Deleted task
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-2', ?, ?, 1, 0)
+        """, (attrs, test_content))
+
+        # Done task
+        cursor.execute("""
+            INSERT INTO tasks (uuid, attrs, content, deleted, done)
+            VALUES ('task-3', ?, ?, 0, 1)
+        """, (attrs, test_content))
+
+        conn.commit()
+        return conn
+
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Default excludes deleted and done
+    results = service.get_tasks_by_priority_flags("urgent", limit=10)
+    assert len(results) == 1
+    assert results[0]["uuid"] == "task-1"
+
+    # Include deleted
+    results = service.get_tasks_by_priority_flags("urgent", include_deleted=True, limit=10)
+    assert len(results) == 2
+
+    # Include done
+    results = service.get_tasks_by_priority_flags("urgent", include_done=True, limit=10)
+    assert len(results) == 2

@@ -14,6 +14,9 @@ Core features include:
 * Ability to get the most recently modified notes.
 * Ability to get the most recently modified tasks.
 * Ability to get the most recent tasks and not have to be restarted.
+* Ability to select tasks by the date they were created (stored in attrs JSON).
+* Ability to select tasks ordered by their point values.
+* Ability to filter tasks by priority flags (urgent, important, none, or both).
 
 Development Requirements
 -----------------------------------------------
