@@ -97,21 +97,32 @@ def search_tasks(
     query: str,
     limit: int = 20,
     include_deleted: bool = False,
-    include_done: bool = False
+    include_done: bool = False,
+    min_points: Optional[float] = None,
+    max_points: Optional[float] = None,
+    flags_filter: Optional[str] = None,
+    sort_by: Optional[str] = None
 ) -> list[dict]:
     """
-    Search tasks by description/content text.
+    Search tasks by description/content text with advanced filtering.
 
     Args:
         query: Search query to match in task content
         limit: Maximum number of tasks to return (default: 20)
         include_deleted: Whether to include deleted tasks (default: False)
         include_done: Whether to include completed tasks (default: False)
+        min_points: Minimum points value to filter by (optional)
+        max_points: Maximum points value to filter by (optional)
+        flags_filter: Filter by priority flags - "urgent", "important", "both", or "none" (optional)
+        sort_by: Sort order - "due" (default), "points", or "created" (optional)
 
     Returns:
         List of matching tasks with details including dates and metadata
     """
-    return tasks_service.search_tasks(query, limit, include_deleted, include_done)
+    return tasks_service.search_tasks(
+        query, limit, include_deleted, include_done,
+        min_points, max_points, flags_filter, sort_by
+    )
 
 
 @mcp.tool()
@@ -119,31 +130,45 @@ def list_tasks(
     limit: int = 20,
     include_deleted: bool = False,
     include_done: bool = False,
-    has_due_date: Optional[bool] = None
+    has_due_date: Optional[bool] = None,
+    min_points: Optional[float] = None,
+    max_points: Optional[float] = None,
+    flags_filter: Optional[str] = None,
+    sort_by: Optional[str] = None
 ) -> list[dict]:
     """
-    List tasks with optional filtering.
+    List tasks with optional filtering and sorting.
 
     Args:
         limit: Maximum number of tasks to return (default: 20)
         include_deleted: Whether to include deleted tasks (default: False)
         include_done: Whether to include completed tasks (default: False)
         has_due_date: Filter tasks with/without due dates (optional)
+        min_points: Minimum points value to filter by (optional)
+        max_points: Maximum points value to filter by (optional)
+        flags_filter: Filter by priority flags - "urgent", "important", "both", or "none" (optional)
+        sort_by: Sort order - "due" (default), "points", or "created" (optional)
 
     Returns:
         List of tasks with details
     """
-    return tasks_service.list_tasks(limit, include_deleted, include_done, has_due_date)
+    return tasks_service.list_tasks(
+        limit, include_deleted, include_done, has_due_date,
+        min_points, max_points, flags_filter, sort_by
+    )
 
 
 @mcp.tool()
-def get_recently_modified_tasks(
+def get_recently_created_tasks(
     limit: int = 20,
     include_deleted: bool = False,
     include_done: bool = False
 ) -> list[dict]:
     """
-    Get the most recently modified tasks.
+    Get the most recently created tasks (sorted by creation date).
+
+    Note: Previously named get_recently_modified_tasks. Now uses createdAt from attrs
+    instead of the non-existent updated_at field.
 
     Args:
         limit: Maximum number of tasks to return (default: 20)
@@ -151,7 +176,7 @@ def get_recently_modified_tasks(
         include_done: Whether to include completed tasks (default: False)
 
     Returns:
-        List of recently modified tasks with details
+        List of recently created tasks with details, ordered by creation date descending
     """
     return tasks_service.get_recently_modified_tasks(limit, include_deleted, include_done)
 

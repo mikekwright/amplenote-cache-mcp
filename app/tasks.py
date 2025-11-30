@@ -65,9 +65,32 @@ class TasksService:
             print(f"Warning: Failed to parse task content: {e}")
             return None
 
-    def search_tasks(self, query: str, limit: int = 20, include_deleted: bool = False, include_done: bool = False) -> list[Task]:
+    def search_tasks(
+        self,
+        query: str,
+        limit: int = 20,
+        include_deleted: bool = False,
+        include_done: bool = False,
+        min_points: Optional[float] = None,
+        max_points: Optional[float] = None,
+        flags_filter: Optional[Literal["urgent", "important", "both", "none"]] = None,
+        sort_by: Optional[Literal["due", "points", "created"]] = None
+    ) -> list[Task]:
         """
         Search tasks by description/body text and return list of matched tasks.
+
+        Args:
+            query: Search query to match in task content
+            limit: Maximum number of tasks to return (default: 20)
+            include_deleted: Whether to include deleted tasks (default: False)
+            include_done: Whether to include completed tasks (default: False)
+            min_points: Minimum points value to filter by (optional)
+            max_points: Maximum points value to filter by (optional)
+            flags_filter: Filter by priority flags - "urgent", "important", "both", or "none" (optional)
+            sort_by: Sort order - "due" (default), "points", or "created" (optional)
+
+        Returns:
+            List of matching tasks with details
         """
         conn = self.db_connection.get_connection()
         cursor = conn.cursor()
@@ -87,13 +110,40 @@ class TasksService:
         if not include_done:
             sql_query += " AND (done IS NULL OR done = 0)"
 
-        sql_query += " ORDER BY due ASC LIMIT ?"
-        params.append(limit)
-
         cursor.execute(sql_query, params)
 
+        # Fetch and parse results
         results = []
         for row in cursor.fetchall():
+            attrs = self._parse_task_attrs(row[7])
+
+            # Apply points filters
+            if min_points is not None:
+                if not attrs or attrs.points is None or attrs.points < min_points:
+                    continue
+            if max_points is not None:
+                if not attrs or attrs.points is None or attrs.points > max_points:
+                    continue
+
+            # Apply flags filter
+            if flags_filter is not None:
+                flags = attrs.flags if attrs and attrs.flags else ""
+                has_urgent = "U" in flags
+                has_important = "I" in flags
+
+                should_include = False
+                if flags_filter == "urgent":
+                    should_include = has_urgent and not has_important
+                elif flags_filter == "important":
+                    should_include = has_important and not has_urgent
+                elif flags_filter == "both":
+                    should_include = has_urgent and has_important
+                elif flags_filter == "none":
+                    should_include = not has_urgent and not has_important
+
+                if not should_include:
+                    continue
+
             results.append({
                 "id": row[0],
                 "uuid": row[1],
@@ -102,13 +152,24 @@ class TasksService:
                 "deleted": False if row[4] == 0 else True,
                 "calendar_sync_required": False if row[5] == 0 else True,
                 "notify_at": None if row[6] is None or row[6] == 0 else datetime.fromtimestamp(row[6]),
-                "attrs": self._parse_task_attrs(row[7]),
+                "attrs": attrs,
                 "content": self._parse_task_content(row[8]),
                 "due": None if row[9] is None or row[9] == 0 else datetime.fromtimestamp(row[9]),
                 "done": False if row[10] == 0 else True,
                 "is_scheduled_bullet": False if row[11] == 0 else True,
                 "parent_uuid": row[12],
             })
+
+        # Apply sorting
+        if sort_by == "points":
+            results.sort(key=lambda x: x["attrs"].points if x["attrs"] and x["attrs"].points else 0, reverse=True)
+        elif sort_by == "created":
+            results.sort(key=lambda x: x["attrs"].created_at if x["attrs"] and x["attrs"].created_at else 0, reverse=True)
+        else:  # Default to "due" or when sort_by is None
+            results.sort(key=lambda x: x["due"].timestamp() if x["due"] else float('inf'))
+
+        # Apply limit
+        results = results[:limit]
 
         conn.close()
         return results
@@ -118,7 +179,11 @@ class TasksService:
         limit: int = 20,
         include_deleted: bool = False,
         include_done: bool = False,
-        has_due_date: Optional[bool] = None
+        has_due_date: Optional[bool] = None,
+        min_points: Optional[float] = None,
+        max_points: Optional[float] = None,
+        flags_filter: Optional[Literal["urgent", "important", "both", "none"]] = None,
+        sort_by: Optional[Literal["due", "points", "created"]] = None
     ) -> list[Task]:
         """
         List tasks with optional filtering.
@@ -128,6 +193,10 @@ class TasksService:
             include_deleted: Whether to include deleted tasks (default: False)
             include_done: Whether to include completed tasks (default: False)
             has_due_date: Filter tasks with/without due dates (optional)
+            min_points: Minimum points value to filter by (optional)
+            max_points: Maximum points value to filter by (optional)
+            flags_filter: Filter by priority flags - "urgent", "important", "both", or "none" (optional)
+            sort_by: Sort order - "due" (default), "points", or "created" (optional)
 
         Returns:
             List of tasks with details
@@ -156,13 +225,40 @@ class TasksService:
             else:
                 query += " AND due IS NULL"
 
-        query += " ORDER BY due ASC LIMIT ?"
-        params.append(limit)
-
         cursor.execute(query, params)
 
+        # Fetch and parse results with filtering
         results = []
         for row in cursor.fetchall():
+            attrs = self._parse_task_attrs(row[7])
+
+            # Apply points filters
+            if min_points is not None:
+                if not attrs or attrs.points is None or attrs.points < min_points:
+                    continue
+            if max_points is not None:
+                if not attrs or attrs.points is None or attrs.points > max_points:
+                    continue
+
+            # Apply flags filter
+            if flags_filter is not None:
+                flags = attrs.flags if attrs and attrs.flags else ""
+                has_urgent = "U" in flags
+                has_important = "I" in flags
+
+                should_include = False
+                if flags_filter == "urgent":
+                    should_include = has_urgent and not has_important
+                elif flags_filter == "important":
+                    should_include = has_important and not has_urgent
+                elif flags_filter == "both":
+                    should_include = has_urgent and has_important
+                elif flags_filter == "none":
+                    should_include = not has_urgent and not has_important
+
+                if not should_include:
+                    continue
+
             results.append({
                 "id": row[0],
                 "uuid": row[1],
@@ -171,7 +267,7 @@ class TasksService:
                 "deleted": False if row[4] == 0 else True,
                 "calendar_sync_required": False if row[5] == 0 else True,
                 "notify_at": None if row[6] is None or row[6] == 0 else datetime.fromtimestamp(row[6]),
-                "attrs": self._parse_task_attrs(row[7]),
+                "attrs": attrs,
                 "content": self._parse_task_content(row[8]),
                 "due": None if row[9] is None or row[9] == 0 else datetime.fromtimestamp(row[9]),
                 "done": False if row[10] == 0 else True,
@@ -179,12 +275,26 @@ class TasksService:
                 "parent_uuid": row[12],
             })
 
+        # Apply sorting
+        if sort_by == "points":
+            results.sort(key=lambda x: x["attrs"].points if x["attrs"] and x["attrs"].points else 0, reverse=True)
+        elif sort_by == "created":
+            results.sort(key=lambda x: x["attrs"].created_at if x["attrs"] and x["attrs"].created_at else 0, reverse=True)
+        else:  # Default to "due" or when sort_by is None
+            results.sort(key=lambda x: x["due"].timestamp() if x["due"] else float('inf'))
+
+        # Apply limit
+        results = results[:limit]
+
         conn.close()
         return results
 
-    def get_recently_modified_tasks(self, limit: int = 20, include_deleted: bool = False, include_done: bool = False) -> list[TaskWithTimestamp]:
+    def get_recently_modified_tasks(self, limit: int = 20, include_deleted: bool = False, include_done: bool = False) -> list[Task]:
         """
-        Get the most recently modified tasks.
+        Get the most recently created tasks (sorted by createdAt from attrs).
+
+        Note: This function previously used updated_at which doesn't exist in the schema.
+        Now uses createdAt from the attrs JSON field instead.
 
         Args:
             limit: Maximum number of tasks to return (default: 20)
@@ -192,52 +302,16 @@ class TasksService:
             include_done: Whether to include completed tasks (default: False)
 
         Returns:
-            List of recently modified tasks with details
+            List of recently created tasks with details, ordered by creation date descending
         """
-        conn = self.db_connection.get_connection()
-        cursor = conn.cursor()
-
-        query = """
-            SELECT
-              id, uuid, local_uuid, remote_uuid, deleted, calendar_sync_required, notify_at, attrs,
-              content, due, done, is_scheduled_bullet, parent_uuid, updated_at
-            FROM tasks
-            WHERE 1=1
-        """
-        params = []
-
-        if not include_deleted:
-            query += " AND (deleted IS NULL OR deleted = 0)"
-
-        if not include_done:
-            query += " AND (done IS NULL OR done = 0)"
-
-        query += " ORDER BY updated_at DESC LIMIT ?"
-        params.append(limit)
-
-        cursor.execute(query, params)
-
-        results = []
-        for row in cursor.fetchall():
-            results.append({
-                "id": row[0],
-                "uuid": row[1],
-                "local_uuid": row[2],
-                "remote_uuid": row[3],
-                "deleted": False if row[4] == 0 else True,
-                "calendar_sync_required": False if row[5] == 0 else True,
-                "notify_at": None if row[6] is None or row[6] == 0 else datetime.fromtimestamp(row[6]),
-                "attrs": self._parse_task_attrs(row[7]),
-                "content": self._parse_task_content(row[8]),
-                "due": None if row[9] is None or row[9] == 0 else datetime.fromtimestamp(row[9]),
-                "done": False if row[10] == 0 else True,
-                "is_scheduled_bullet": False if row[11] == 0 else True,
-                "parent_uuid": row[12],
-                "updated_at": row[13]
-            })
-
-        conn.close()
-        return results
+        # Reuse the get_tasks_by_created_date method which already implements this functionality
+        return self.get_tasks_by_created_date(
+            start_date=None,
+            end_date=None,
+            limit=limit,
+            include_deleted=include_deleted,
+            include_done=include_done
+        )
 
     def get_tasks_by_note(self, note_uuid: str, include_deleted: bool = False, include_done: bool = False) -> list[Task]:
         """
