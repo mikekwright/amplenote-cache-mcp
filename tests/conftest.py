@@ -56,15 +56,18 @@ def populated_db(test_db_path):
     cursor.execute("""
         CREATE TABLE tasks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            uuid TEXT,
-            body TEXT,
-            due TEXT,
-            duration INTEGER,
-            notify TEXT,
-            points INTEGER,
-            priority INTEGER,
-            start_at TEXT,
-            deleted INTEGER,
+            uuid CHARACTER(36) NOT NULL,
+            local_uuid CHARACTER(36),
+            remote_uuid CHARACTER(36),
+            deleted INTEGER NOT NULL DEFAULT 0,
+            calendar_sync_required INTEGER NOT NULL DEFAULT 0,
+            notify_at INTEGER,
+            attrs TEXT,
+            content TEXT,
+            due INTEGER,
+            done INTEGER NOT NULL DEFAULT 0,
+            is_scheduled_bullet INTEGER NOT NULL DEFAULT 0,
+            parent_uuid CHARACTER(36),
             updated_at TEXT
         )
     """)
@@ -109,17 +112,18 @@ def populated_db(test_db_path):
     """)
 
     # Insert sample tasks
+    # Fields: uuid, local_uuid, remote_uuid, deleted, calendar_sync_required, notify_at, attrs, content, due, done, is_scheduled_bullet, parent_uuid, updated_at
     tasks_data = [
-        ('task-uuid-1', 'Complete project documentation', '2024-02-01', 120, None, 5, 1, None, None, '2024-01-15 10:30:00'),
-        ('task-uuid-2', 'Review pull requests', '2024-01-20', 60, None, 3, 2, None, None, '2024-01-16 12:00:00'),
-        ('task-uuid-3', 'Update dependencies', None, 30, None, 2, 0, None, None, '2024-01-14 08:00:00'),
-        ('task-uuid-4', 'Deleted task', '2024-01-25', 45, None, 1, 1, None, 1, '2024-01-13 15:00:00'),
+        ('task-uuid-1', 'local-task-1', 'remote-task-1', 0, 0, None, '{}', 'Complete project documentation', 1706745600, 0, 0, None, '2024-01-15 10:30:00'),
+        ('task-uuid-2', 'local-task-2', 'remote-task-2', 0, 0, None, '{}', 'Review pull requests', 1705708800, 0, 0, None, '2024-01-16 12:00:00'),
+        ('task-uuid-3', 'local-task-3', 'remote-task-3', 0, 0, None, '{}', 'Update dependencies', None, 0, 0, None, '2024-01-14 08:00:00'),
+        ('task-uuid-4', 'local-task-4', 'remote-task-4', 1, 0, None, '{}', 'Deleted task', 1706140800, 0, 0, None, '2024-01-13 15:00:00'),
     ]
 
     for task in tasks_data:
         cursor.execute("""
-            INSERT INTO tasks (uuid, body, due, duration, notify, points, priority, start_at, deleted, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tasks (uuid, local_uuid, remote_uuid, deleted, calendar_sync_required, notify_at, attrs, content, due, done, is_scheduled_bullet, parent_uuid, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, task)
 
     # Insert note references

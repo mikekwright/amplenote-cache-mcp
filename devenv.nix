@@ -1,11 +1,12 @@
 { pkgs, project-name, python-pkgs, ... }:
 
 rec {
-  # https://devenv.sh/basics/
   env.PROJECT_NAME = project-name;
 
-  # https://devenv.sh/packages/
-  packages = [ pkgs.jq ];
+  packages = [
+    pkgs.jq
+    pkgs.sqlite
+  ];
 
   languages.python = {
     enable = true;

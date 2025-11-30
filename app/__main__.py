@@ -96,27 +96,29 @@ def get_recently_modified_notes(limit: int = 20) -> list[dict]:
 def search_tasks(
     query: str,
     limit: int = 20,
-    include_deleted: bool = False
+    include_deleted: bool = False,
+    include_done: bool = False
 ) -> list[dict]:
     """
-    Search tasks by description/body text.
+    Search tasks by description/content text.
 
     Args:
-        query: Search query to match in task body
+        query: Search query to match in task content
         limit: Maximum number of tasks to return (default: 20)
         include_deleted: Whether to include deleted tasks (default: False)
+        include_done: Whether to include completed tasks (default: False)
 
     Returns:
-        List of matching tasks with details including duration, dates, and priority
+        List of matching tasks with details including dates and metadata
     """
-    return tasks_service.search_tasks(query, limit, include_deleted)
+    return tasks_service.search_tasks(query, limit, include_deleted, include_done)
 
 
 @mcp.tool()
 def list_tasks(
     limit: int = 20,
     include_deleted: bool = False,
-    priority: Optional[int] = None,
+    include_done: bool = False,
     has_due_date: Optional[bool] = None
 ) -> list[dict]:
     """
@@ -125,19 +127,20 @@ def list_tasks(
     Args:
         limit: Maximum number of tasks to return (default: 20)
         include_deleted: Whether to include deleted tasks (default: False)
-        priority: Filter by priority level (optional)
+        include_done: Whether to include completed tasks (default: False)
         has_due_date: Filter tasks with/without due dates (optional)
 
     Returns:
         List of tasks with details
     """
-    return tasks_service.list_tasks(limit, include_deleted, priority, has_due_date)
+    return tasks_service.list_tasks(limit, include_deleted, include_done, has_due_date)
 
 
 @mcp.tool()
 def get_recently_modified_tasks(
     limit: int = 20,
-    include_deleted: bool = False
+    include_deleted: bool = False,
+    include_done: bool = False
 ) -> list[dict]:
     """
     Get the most recently modified tasks.
@@ -145,11 +148,12 @@ def get_recently_modified_tasks(
     Args:
         limit: Maximum number of tasks to return (default: 20)
         include_deleted: Whether to include deleted tasks (default: False)
+        include_done: Whether to include completed tasks (default: False)
 
     Returns:
         List of recently modified tasks with details
     """
-    return tasks_service.get_recently_modified_tasks(limit, include_deleted)
+    return tasks_service.get_recently_modified_tasks(limit, include_deleted, include_done)
 
 
 @mcp.tool()
