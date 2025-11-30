@@ -1310,3 +1310,433 @@ def test_list_tasks_with_combined_filters():
     assert results[0]["attrs"].points == 20.0
     assert results[1]["attrs"].points == 15.0
     assert results[2]["attrs"].points == 10.0
+
+
+# ============================================================================
+# Tests for TaskQuery model - comprehensive query scenarios
+# ============================================================================
+
+def test_query_tasks_basic():
+    """Test basic TaskQuery functionality."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+    from app.models import TaskQuery
+
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        # Create test tasks
+        for i in range(5):
+            content = json.dumps([{"type": "paragraph", "content": [{"type": "text", "text": f"Task {i}"}]}])
+            attrs = json.dumps({"createdAt": 1735689600 + i * 86400, "points": float(i + 1) * 5})
+            cursor.execute("""
+                INSERT INTO tasks (uuid, attrs, content, deleted, done)
+                VALUES (?, ?, ?, 0, 0)
+            """, (f"task-{i}", attrs, content))
+
+        conn.commit()
+        return conn
+
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Test basic query - get all tasks
+    query = TaskQuery(limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 5
+
+    # Test content search
+    query = TaskQuery(content_search="Task 2", limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 1
+    assert results[0]["uuid"] == "task-2"
+
+
+def test_query_tasks_points_range():
+    """Test TaskQuery with points range filtering."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+    from app.models import TaskQuery
+
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        # Create tasks with different point values
+        test_data = [
+            ("task-1", 5.0),
+            ("task-2", 10.0),
+            ("task-3", 15.0),
+            ("task-4", 20.0),
+            ("task-5", 25.0),
+        ]
+
+        for uuid, points in test_data:
+            content = json.dumps([{"type": "paragraph", "content": [{"type": "text", "text": "Task"}]}])
+            attrs = json.dumps({"createdAt": 1735689600, "points": points})
+            cursor.execute("""
+                INSERT INTO tasks (uuid, attrs, content, deleted, done)
+                VALUES (?, ?, ?, 0, 0)
+            """, (uuid, attrs, content))
+
+        conn.commit()
+        return conn
+
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Test min_points only
+    query = TaskQuery(min_points=15.0, limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 3
+    assert all(r["attrs"].points >= 15.0 for r in results)
+
+    # Test max_points only
+    query = TaskQuery(max_points=15.0, limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 3
+    assert all(r["attrs"].points <= 15.0 for r in results)
+
+    # Test both min and max
+    query = TaskQuery(min_points=10.0, max_points=20.0, limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 3
+    assert all(10.0 <= r["attrs"].points <= 20.0 for r in results)
+
+
+def test_query_tasks_timestamp_ranges():
+    """Test TaskQuery with timestamp range filtering."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+    from app.models import TaskQuery
+
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        # Create tasks with different timestamps
+        test_data = [
+            ("task-1", 1735689600, None),      # Created Jan 1, not completed
+            ("task-2", 1736899200, 1737331200), # Created Jan 15, completed Jan 20
+            ("task-3", 1738368000, 1738454400), # Created Feb 1, completed Feb 2
+        ]
+
+        for uuid, created, completed in test_data:
+            content = json.dumps([{"type": "paragraph", "content": [{"type": "text", "text": "Task"}]}])
+            attrs_data = {"createdAt": created}
+            if completed:
+                attrs_data["completedAt"] = completed
+            attrs = json.dumps(attrs_data)
+            cursor.execute("""
+                INSERT INTO tasks (uuid, attrs, content, deleted, done)
+                VALUES (?, ?, ?, 0, 0)
+            """, (uuid, attrs, content))
+
+        conn.commit()
+        return conn
+
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Test created_after
+    query = TaskQuery(created_after=1736000000, limit=10)  # After Jan 5
+    results = service.query_tasks(query)
+    assert len(results) == 2
+    assert all(r["attrs"].created_at >= 1736000000 for r in results)
+
+    # Test created_before
+    query = TaskQuery(created_before=1737000000, limit=10)  # Before Jan 16
+    results = service.query_tasks(query)
+    assert len(results) == 2
+    assert all(r["attrs"].created_at <= 1737000000 for r in results)
+
+    # Test completed_after (only completed tasks)
+    query = TaskQuery(completed_after=1737500000, limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 1
+    assert results[0]["uuid"] == "task-3"
+
+
+def test_query_tasks_flags_filtering():
+    """Test TaskQuery with comprehensive flags filtering."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+    from app.models import TaskQuery
+
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        # Create tasks with different flag combinations
+        test_data = [
+            ("task-urgent", "U"),
+            ("task-important", "I"),
+            ("task-both", "IU"),
+            ("task-delegated", "D"),
+            ("task-none", ""),
+            ("task-all", "IUD"),
+        ]
+
+        for uuid, flags in test_data:
+            content = json.dumps([{"type": "paragraph", "content": [{"type": "text", "text": "Task"}]}])
+            attrs = json.dumps({"createdAt": 1735689600, "flags": flags})
+            cursor.execute("""
+                INSERT INTO tasks (uuid, attrs, content, deleted, done)
+                VALUES (?, ?, ?, 0, 0)
+            """, (uuid, attrs, content))
+
+        conn.commit()
+        return conn
+
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Test flags_filter: "any" - has at least one I or U
+    query = TaskQuery(flags_filter="any", limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 4  # urgent, important, both, all
+    uuids = {r["uuid"] for r in results}
+    assert uuids == {"task-urgent", "task-important", "task-both", "task-all"}
+
+    # Test has_flags: must have all specified flags
+    query = TaskQuery(has_flags="IU", limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 2  # both and all
+    uuids = {r["uuid"] for r in results}
+    assert uuids == {"task-both", "task-all"}
+
+
+def test_query_tasks_duration_and_recurring():
+    """Test TaskQuery with duration and recurring filters."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+    from app.models import TaskQuery
+
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        # Create tasks with different durations and repeat settings
+        test_data = [
+            ("task-1", "PT30M", None),          # Has duration, not recurring
+            ("task-2", "PT1H", "P1D"),          # Has duration, recurring
+            ("task-3", None, "P1W"),            # No duration, recurring
+            ("task-4", None, None),             # No duration, not recurring
+        ]
+
+        for uuid, duration, repeat in test_data:
+            content = json.dumps([{"type": "paragraph", "content": [{"type": "text", "text": "Task"}]}])
+            attrs_data = {"createdAt": 1735689600}
+            if duration:
+                attrs_data["duration"] = duration
+            if repeat:
+                attrs_data["repeat"] = repeat
+            attrs = json.dumps(attrs_data)
+            cursor.execute("""
+                INSERT INTO tasks (uuid, attrs, content, deleted, done)
+                VALUES (?, ?, ?, 0, 0)
+            """, (uuid, attrs, content))
+
+        conn.commit()
+        return conn
+
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Test has_duration filter
+    query = TaskQuery(has_duration=True, limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 2
+    assert all(r["attrs"].duration is not None for r in results)
+
+    # Test duration_equals
+    query = TaskQuery(duration_equals="PT30M", limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 1
+    assert results[0]["uuid"] == "task-1"
+
+    # Test is_recurring
+    query = TaskQuery(is_recurring=True, limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 2
+    uuids = {r["uuid"] for r in results}
+    assert uuids == {"task-2", "task-3"}
+
+
+def test_query_tasks_sorting_and_pagination():
+    """Test TaskQuery sorting and pagination."""
+    from unittest.mock import Mock
+    import sqlite3
+    from app.tasks import TasksService
+    from app.models import TaskQuery
+
+    def create_test_db():
+        conn = sqlite3.connect(":memory:")
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY,
+                uuid CHARACTER(36),
+                local_uuid CHARACTER(36),
+                remote_uuid CHARACTER(36),
+                deleted INTEGER DEFAULT 0,
+                calendar_sync_required INTEGER DEFAULT 0,
+                notify_at INTEGER,
+                attrs TEXT,
+                content TEXT,
+                due INTEGER,
+                done INTEGER DEFAULT 0,
+                is_scheduled_bullet INTEGER DEFAULT 0,
+                parent_uuid CHARACTER(36)
+            )
+        """)
+
+        # Create tasks with varying attributes
+        for i in range(10):
+            content = json.dumps([{"type": "paragraph", "content": [{"type": "text", "text": f"Task {i}"}]}])
+            attrs = json.dumps({
+                "createdAt": 1735689600 + i * 86400,
+                "points": float(i + 1),
+                "victoryValue": float(10 - i),
+                "streakCount": i % 3
+            })
+            cursor.execute("""
+                INSERT INTO tasks (uuid, attrs, content, deleted, done)
+                VALUES (?, ?, ?, 0, 0)
+            """, (f"task-{i}", attrs, content))
+
+        conn.commit()
+        return conn
+
+    mock_db_connection = Mock()
+    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+
+    service = TasksService(mock_db_connection)
+
+    # Test sorting by points ascending
+    query = TaskQuery(sort_by="points", sort_descending=False, limit=10)
+    results = service.query_tasks(query)
+    assert len(results) == 10
+    for i in range(9):
+        assert results[i]["attrs"].points <= results[i + 1]["attrs"].points
+
+    # Test sorting by victory_value descending
+    query = TaskQuery(sort_by="victory_value", sort_descending=True, limit=10)
+    results = service.query_tasks(query)
+    for i in range(9):
+        assert results[i]["attrs"].victory_value >= results[i + 1]["attrs"].victory_value
+
+    # Test pagination
+    query = TaskQuery(limit=3, offset=0, sort_by="created")
+    page1 = service.query_tasks(query)
+    assert len(page1) == 3
+
+    query = TaskQuery(limit=3, offset=3, sort_by="created")
+    page2 = service.query_tasks(query)
+    assert len(page2) == 3
+
+    # Pages should have different tasks
+    page1_uuids = {t["uuid"] for t in page1}
+    page2_uuids = {t["uuid"] for t in page2}
+    assert len(page1_uuids & page2_uuids) == 0

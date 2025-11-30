@@ -9,6 +9,7 @@ from typing import Optional
 from fastmcp import FastMCP
 
 from .container import Container
+from .models import TaskQuery
 
 
 # Initialize DI container and services
@@ -208,6 +209,96 @@ def get_tasks_by_note(note_uuid: str) -> list[dict]:
         List of tasks that mention this note
     """
     return tasks_service.get_tasks_by_note(note_uuid)
+
+
+@mcp.tool()
+def query_tasks(query: dict) -> list[dict]:
+    """
+    Advanced task querying with comprehensive filtering capabilities.
+
+    Supports filtering on all task fields including attrs metadata with range capabilities.
+    This is the recommended way to query tasks with complex criteria.
+
+    Args:
+        query: Dictionary representing a TaskQuery with the following optional fields:
+
+            Content/Text Search:
+            - content_search (str): Full-text search in task content
+
+            Basic Filters:
+            - include_deleted (bool): Include deleted tasks (default: False)
+            - include_done (bool): Include completed tasks (default: False)
+            - has_due_date (bool): Filter tasks with/without due dates
+            - due_before (int): Unix timestamp - tasks due before this date
+            - due_after (int): Unix timestamp - tasks due after this date
+
+            Points Filtering (range):
+            - min_points (float): Minimum points value
+            - max_points (float): Maximum points value
+
+            Victory Value Filtering (range):
+            - minVictoryValue (float): Minimum victory value
+            - maxVictoryValue (float): Maximum victory value
+
+            Streak Count Filtering (range):
+            - minStreakCount (int): Minimum streak count
+            - maxStreakCount (int): Maximum streak count
+
+            Timestamp Filtering (range, Unix timestamps):
+            - createdAfter (int): Created after this date
+            - createdBefore (int): Created before this date
+            - completedAfter (int): Completed after this date
+            - completedBefore (int): Completed before this date
+            - startAfter (int): Starts after this date
+            - startBefore (int): Starts before this date
+
+            Flag Filtering:
+            - flagsFilter (str): "urgent" (U only), "important" (I only), "both" (I and U),
+                                "none" (neither), "any" (has at least one)
+            - hasFlags (str): Must have all specified flags (e.g., "IU", "D")
+
+            Duration Filtering:
+            - hasDuration (bool): Filter tasks with/without duration
+            - durationEquals (str): Exact duration match (ISO 8601 format, e.g., "PT30M")
+
+            Recurring Filtering:
+            - isRecurring (bool): Filter recurring/non-recurring tasks
+
+            Reference Filtering:
+            - hasReferences (bool): Filter tasks with/without references
+            - referencesUuid (str): Tasks that reference this UUID
+
+            Sorting:
+            - sortBy (str): "due", "points", "created", "completed", "victory_value", "streak_count"
+            - sortDescending (bool): Sort in descending order (default: False)
+
+            Pagination:
+            - limit (int): Maximum results (1-1000, default: 20)
+            - offset (int): Number of results to skip (default: 0)
+
+    Returns:
+        List of tasks matching the query criteria
+
+    Examples:
+        # Find urgent tasks with high points created this month
+        query_tasks({
+            "flagsFilter": "urgent",
+            "min_points": 10,
+            "createdAfter": 1735689600,
+            "sortBy": "points",
+            "sortDescending": True
+        })
+
+        # Find recurring tasks with victory value in range
+        query_tasks({
+            "isRecurring": True,
+            "minVictoryValue": 5.0,
+            "maxVictoryValue": 15.0,
+            "sortBy": "victory_value"
+        })
+    """
+    task_query = TaskQuery(**query)
+    return tasks_service.query_tasks(task_query)
 
 
 if __name__ == "__main__":
