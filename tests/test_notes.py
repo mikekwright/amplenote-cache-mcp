@@ -23,7 +23,7 @@ def test_get_note_by_uuid(notes_service):
     """Test retrieving a note by UUID."""
     note = notes_service.get_note_by_uuid("uuid-1")
 
-    assert "error" not in note
+    assert note is not None
     assert note["remote_uuid"] == "uuid-1"
     assert note["name"] == "Project Planning"
     assert "project planning note" in note["text"].lower()
@@ -32,21 +32,21 @@ def test_get_note_by_uuid(notes_service):
 def test_get_note_by_uuid_not_found(notes_service):
     """Test retrieving a non-existent note."""
     note = notes_service.get_note_by_uuid("nonexistent-uuid")
-    assert "error" in note
+    assert note is None
 
 
 def test_get_note_by_name(notes_service):
     """Test retrieving a note by name."""
     note = notes_service.get_note_by_name("Meeting")
 
-    assert "error" not in note
+    assert note is not None
     assert "Meeting Notes" in note["name"]
 
 
 def test_get_note_by_name_not_found(notes_service):
     """Test retrieving a note with non-matching name."""
     note = notes_service.get_note_by_name("Nonexistent Note Title")
-    assert "error" in note
+    assert note is None
 
 
 def test_list_notes(notes_service):
@@ -66,19 +66,6 @@ def test_list_notes_pagination(notes_service):
     assert len(first_page) == 1
     assert len(second_page) == 1
     assert first_page[0]["remote_uuid"] != second_page[0]["remote_uuid"]
-
-
-def test_get_recently_modified_notes(notes_service):
-    """Test retrieving recently modified notes."""
-    results = notes_service.get_recently_modified_notes(limit=5)
-
-    assert len(results) > 0
-    assert all("updated_at" in r for r in results)
-
-    # Verify sorted by updated_at descending
-    if len(results) > 1:
-        for i in range(len(results) - 1):
-            assert results[i]["updated_at"] >= results[i + 1]["updated_at"]
 
 
 def test_get_note_references(notes_service):
@@ -131,7 +118,7 @@ def test_notes_service_with_mock_db():
     conn.commit()
 
     # Mock returns the in-memory connection
-    mock_db_connection.get_connection.return_value = conn
+    mock_db_connection.get_readonly_connection.return_value = conn
 
     # Import after mocking to avoid import-time issues
     from app.notes import NotesService

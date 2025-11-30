@@ -20,4 +20,4 @@ devenv.local.nix
 devenv.local.yaml
 .direnv
 .claude
-
+**/__pycache__/**

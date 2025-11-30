@@ -44,10 +44,10 @@ def test_database_connection_with_mock():
     """Test database connection can be mocked for unit tests."""
     # Create a mock database connection
     mock_connection = Mock(spec=DatabaseConnection)
-    mock_connection.get_connection.return_value = sqlite3.connect(":memory:")
+    mock_connection.get_readonly_connection.return_value = sqlite3.connect(":memory:")
 
     # Verify the mock works
-    conn = mock_connection.get_connection()
+    conn = mock_connection.get_readonly_connection()
     assert conn is not None
 
     cursor = conn.cursor()

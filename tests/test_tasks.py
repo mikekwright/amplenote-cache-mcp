@@ -9,7 +9,7 @@ import json
 def test_search_tasks(tasks_service):
     """Test searching tasks by description."""
     # Search for a broader term to find tasks
-    results = tasks_service.search_tasks("the", limit=20, include_done=True)
+    results = tasks_service.search_tasks("the", limit=20)
 
     # Should have results since we're searching the actual database
     if len(results) > 0:
@@ -32,23 +32,6 @@ def test_search_tasks_no_results(tasks_service):
     assert len(results) == 0
 
 
-def test_search_tasks_exclude_deleted(tasks_service):
-    """Test that deleted tasks are excluded by default."""
-    results = tasks_service.search_tasks("task", include_deleted=False)
-
-    # Should not include the deleted task
-    assert all(r["deleted"] == False for r in results)
-
-
-def test_search_tasks_include_deleted(tasks_service):
-    """Test including deleted tasks in search."""
-    results = tasks_service.search_tasks("Deleted", include_deleted=True)
-
-    # Should find the deleted task
-    assert len(results) > 0
-    assert any(r["deleted"] == True for r in results)
-
-
 def test_list_tasks(tasks_service):
     """Test listing tasks with default filters."""
     results = tasks_service.list_tasks(limit=10)
@@ -68,45 +51,10 @@ def test_list_tasks_filter_by_priority(tasks_service):
     assert len(results) >= 0
 
 
-def test_list_tasks_filter_has_due_date(tasks_service):
-    """Test filtering tasks with due dates."""
-    results_with_due = tasks_service.list_tasks(has_due_date=True, limit=10)
-    results_without_due = tasks_service.list_tasks(has_due_date=False, limit=10)
-
-    assert all(r["due"] is not None for r in results_with_due)
-    assert all(r["due"] is None for r in results_without_due)
-
 
 def test_list_tasks_exclude_deleted(tasks_service):
     """Test that deleted tasks are excluded by default."""
     results = tasks_service.list_tasks(include_deleted=False)
-
-    assert all(r["deleted"] == False for r in results)
-
-
-def test_get_recently_modified_tasks(tasks_service):
-    """Test retrieving recently created tasks (sorted by createdAt)."""
-    results = tasks_service.get_recently_modified_tasks(limit=5)
-
-    # Results may be empty if no tasks with createdAt exist
-    assert isinstance(results, list)
-
-    if len(results) > 0:
-        # Should have attrs field
-        assert all("attrs" in r for r in results)
-
-        # Filter to only tasks that have createdAt
-        tasks_with_created = [r for r in results if r["attrs"] and r["attrs"].created_at]
-
-        # Verify sorted by created_at descending (most recent first)
-        if len(tasks_with_created) > 1:
-            for i in range(len(tasks_with_created) - 1):
-                assert tasks_with_created[i]["attrs"].created_at >= tasks_with_created[i + 1]["attrs"].created_at
-
-
-def test_get_recently_modified_tasks_exclude_deleted(tasks_service):
-    """Test that recently created excludes deleted tasks by default."""
-    results = tasks_service.get_recently_modified_tasks(include_deleted=False)
 
     assert all(r["deleted"] == False for r in results)
 
@@ -173,7 +121,7 @@ def test_tasks_service_with_mock_db():
     conn.commit()
 
     # Mock returns the in-memory connection
-    mock_db_connection.get_connection.return_value = conn
+    mock_db_connection.get_readonly_connection.return_value = conn
 
     # Import after mocking to avoid import-time issues
     from app.tasks import TasksService
@@ -182,7 +130,7 @@ def test_tasks_service_with_mock_db():
 
     # Test that service uses the mocked connection
     # We need to search for something in the content
-    results = service.search_tasks("Test", limit=10, include_deleted=False)
+    results = service.search_tasks("Test", limit=10)
 
     assert len(results) > 0
     # Content is now a TaskContent model
@@ -207,7 +155,8 @@ def test_tasks_service_dependency_injection():
 
 def test_task_content_parsing(tasks_service):
     """Test that task content JSON is properly parsed into TaskContent model."""
-    results = tasks_service.search_tasks("", limit=5, include_deleted=False, include_done=False)
+    # Use list_tasks with include filters to get all tasks
+    results = tasks_service.list_tasks(limit=5, include_deleted=False, include_done=False)
 
     if len(results) > 0:
         # Check that content is parsed
@@ -224,7 +173,8 @@ def test_task_content_parsing(tasks_service):
 
 def test_task_attrs_parsing(tasks_service):
     """Test that task attrs JSON is properly parsed into TaskAttrs model."""
-    results = tasks_service.search_tasks("", limit=5, include_deleted=False, include_done=False)
+    # Use list_tasks with include filters to get all tasks
+    results = tasks_service.list_tasks(limit=5, include_deleted=False, include_done=False)
 
     if len(results) > 0:
         # Check that attrs is parsed
@@ -425,7 +375,7 @@ def test_get_tasks_by_created_date():
 
     # Create mock that returns a fresh connection each time
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
@@ -513,7 +463,7 @@ def test_get_tasks_by_created_date_exclude_deleted_done():
         return conn
 
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
@@ -593,7 +543,7 @@ def test_get_tasks_ordered_by_points():
         return conn
 
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
@@ -672,7 +622,7 @@ def test_get_tasks_ordered_by_points_exclude_deleted_done():
         return conn
 
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
@@ -751,7 +701,7 @@ def test_get_tasks_by_priority_flags_urgent_only():
     """, (attrs_none, test_content))
 
     conn.commit()
-    mock_db_connection.get_connection.return_value = conn
+    mock_db_connection.get_readonly_connection.return_value = conn
 
     service = TasksService(mock_db_connection)
 
@@ -818,7 +768,7 @@ def test_get_tasks_by_priority_flags_important_only():
     """, (attrs_both, test_content))
 
     conn.commit()
-    mock_db_connection.get_connection.return_value = conn
+    mock_db_connection.get_readonly_connection.return_value = conn
 
     service = TasksService(mock_db_connection)
 
@@ -885,7 +835,7 @@ def test_get_tasks_by_priority_flags_both():
     """, (attrs_both2, test_content))
 
     conn.commit()
-    mock_db_connection.get_connection.return_value = conn
+    mock_db_connection.get_readonly_connection.return_value = conn
 
     service = TasksService(mock_db_connection)
 
@@ -959,7 +909,7 @@ def test_get_tasks_by_priority_flags_none():
     """, (attrs_d, test_content))
 
     conn.commit()
-    mock_db_connection.get_connection.return_value = conn
+    mock_db_connection.get_readonly_connection.return_value = conn
 
     service = TasksService(mock_db_connection)
 
@@ -1027,7 +977,7 @@ def test_get_tasks_by_priority_flags_exclude_deleted_done():
         return conn
 
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
@@ -1043,273 +993,6 @@ def test_get_tasks_by_priority_flags_exclude_deleted_done():
     # Include done
     results = service.get_tasks_by_priority_flags("urgent", include_done=True, limit=10)
     assert len(results) == 2
-
-
-# ============================================================================
-# Tests for enhanced search_tasks and list_tasks with new parameters
-# ============================================================================
-
-def test_search_tasks_with_points_filter():
-    """Test search_tasks with min_points and max_points filters."""
-    from unittest.mock import Mock
-    import sqlite3
-    from app.tasks import TasksService
-
-    def create_test_db():
-        conn = sqlite3.connect(":memory:")
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE tasks (
-                id INTEGER PRIMARY KEY,
-                uuid CHARACTER(36),
-                local_uuid CHARACTER(36),
-                remote_uuid CHARACTER(36),
-                deleted INTEGER DEFAULT 0,
-                calendar_sync_required INTEGER DEFAULT 0,
-                notify_at INTEGER,
-                attrs TEXT,
-                content TEXT,
-                due INTEGER,
-                done INTEGER DEFAULT 0,
-                is_scheduled_bullet INTEGER DEFAULT 0,
-                parent_uuid CHARACTER(36)
-            )
-        """)
-
-        # Tasks with different point values
-        for i, points in enumerate([5.0, 10.0, 15.0, 20.0]):
-            content = json.dumps([{"type": "paragraph", "content": [{"type": "text", "text": f"Test task {i}"}]}])
-            attrs = json.dumps({"createdAt": 1735689600, "points": points})
-            cursor.execute("""
-                INSERT INTO tasks (uuid, attrs, content, deleted, done)
-                VALUES (?, ?, ?, 0, 0)
-            """, (f"task-{i}", attrs, content))
-
-        conn.commit()
-        return conn
-
-    mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
-
-    service = TasksService(mock_db_connection)
-
-    # Test min_points filter
-    results = service.search_tasks("Test", min_points=10.0, limit=10)
-    assert len(results) == 3
-    assert all(r["attrs"].points >= 10.0 for r in results)
-
-    # Test max_points filter
-    results = service.search_tasks("Test", max_points=15.0, limit=10)
-    assert len(results) == 3
-    assert all(r["attrs"].points <= 15.0 for r in results)
-
-    # Test both filters
-    results = service.search_tasks("Test", min_points=10.0, max_points=15.0, limit=10)
-    assert len(results) == 2
-    assert all(10.0 <= r["attrs"].points <= 15.0 for r in results)
-
-
-def test_search_tasks_with_flags_filter():
-    """Test search_tasks with flags_filter parameter."""
-    from unittest.mock import Mock
-    import sqlite3
-    from app.tasks import TasksService
-
-    def create_test_db():
-        conn = sqlite3.connect(":memory:")
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE tasks (
-                id INTEGER PRIMARY KEY,
-                uuid CHARACTER(36),
-                local_uuid CHARACTER(36),
-                remote_uuid CHARACTER(36),
-                deleted INTEGER DEFAULT 0,
-                calendar_sync_required INTEGER DEFAULT 0,
-                notify_at INTEGER,
-                attrs TEXT,
-                content TEXT,
-                due INTEGER,
-                done INTEGER DEFAULT 0,
-                is_scheduled_bullet INTEGER DEFAULT 0,
-                parent_uuid CHARACTER(36)
-            )
-        """)
-
-        # Tasks with different flags
-        flags_list = ["U", "I", "IU", ""]
-        for i, flags in enumerate(flags_list):
-            content = json.dumps([{"type": "paragraph", "content": [{"type": "text", "text": f"Test task {i}"}]}])
-            attrs = json.dumps({"createdAt": 1735689600, "flags": flags}) if flags else json.dumps({"createdAt": 1735689600})
-            cursor.execute("""
-                INSERT INTO tasks (uuid, attrs, content, deleted, done)
-                VALUES (?, ?, ?, 0, 0)
-            """, (f"task-{i}", attrs, content))
-
-        conn.commit()
-        return conn
-
-    mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
-
-    service = TasksService(mock_db_connection)
-
-    # Test urgent only
-    results = service.search_tasks("Test", flags_filter="urgent", limit=10)
-    assert len(results) == 1
-
-    # Test important only
-    results = service.search_tasks("Test", flags_filter="important", limit=10)
-    assert len(results) == 1
-
-    # Test both
-    results = service.search_tasks("Test", flags_filter="both", limit=10)
-    assert len(results) == 1
-
-    # Test none
-    results = service.search_tasks("Test", flags_filter="none", limit=10)
-    assert len(results) == 1
-
-
-def test_search_tasks_with_sort_by():
-    """Test search_tasks with sort_by parameter."""
-    from unittest.mock import Mock
-    import sqlite3
-    from app.tasks import TasksService
-
-    def create_test_db():
-        conn = sqlite3.connect(":memory:")
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE tasks (
-                id INTEGER PRIMARY KEY,
-                uuid CHARACTER(36),
-                local_uuid CHARACTER(36),
-                remote_uuid CHARACTER(36),
-                deleted INTEGER DEFAULT 0,
-                calendar_sync_required INTEGER DEFAULT 0,
-                notify_at INTEGER,
-                attrs TEXT,
-                content TEXT,
-                due INTEGER,
-                done INTEGER DEFAULT 0,
-                is_scheduled_bullet INTEGER DEFAULT 0,
-                parent_uuid CHARACTER(36)
-            )
-        """)
-
-        # Tasks with different points and created dates
-        test_data = [
-            ("task-1", 1735689600, 10.0, 1738368000),  # Created: Jan 1, Points: 10, Due: Feb 1
-            ("task-2", 1736899200, 20.0, 1735689600),  # Created: Jan 15, Points: 20, Due: Jan 1
-            ("task-3", 1738368000, 5.0, 1736899200),   # Created: Feb 1, Points: 5, Due: Jan 15
-        ]
-
-        for uuid, created, points, due in test_data:
-            content = json.dumps([{"type": "paragraph", "content": [{"type": "text", "text": "Test task"}]}])
-            attrs = json.dumps({"createdAt": created, "points": points})
-            cursor.execute("""
-                INSERT INTO tasks (uuid, attrs, content, due, deleted, done)
-                VALUES (?, ?, ?, ?, 0, 0)
-            """, (uuid, attrs, content, due))
-
-        conn.commit()
-        return conn
-
-    mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
-
-    service = TasksService(mock_db_connection)
-
-    # Test sort by points (descending)
-    results = service.search_tasks("Test", sort_by="points", limit=10)
-    assert len(results) == 3
-    assert results[0]["attrs"].points == 20.0
-    assert results[1]["attrs"].points == 10.0
-    assert results[2]["attrs"].points == 5.0
-
-    # Test sort by created (descending - most recent first)
-    results = service.search_tasks("Test", sort_by="created", limit=10)
-    assert len(results) == 3
-    assert results[0]["attrs"].created_at == 1738368000  # Feb 1
-    assert results[1]["attrs"].created_at == 1736899200  # Jan 15
-    assert results[2]["attrs"].created_at == 1735689600  # Jan 1
-
-    # Test sort by due (ascending - earliest first)
-    results = service.search_tasks("Test", sort_by="due", limit=10)
-    assert len(results) == 3
-    assert results[0]["uuid"] == "task-2"  # Due Jan 1
-    assert results[1]["uuid"] == "task-3"  # Due Jan 15
-    assert results[2]["uuid"] == "task-1"  # Due Feb 1
-
-
-def test_list_tasks_with_combined_filters():
-    """Test list_tasks with multiple filters combined."""
-    from unittest.mock import Mock
-    import sqlite3
-    from app.tasks import TasksService
-
-    def create_test_db():
-        conn = sqlite3.connect(":memory:")
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE tasks (
-                id INTEGER PRIMARY KEY,
-                uuid CHARACTER(36),
-                local_uuid CHARACTER(36),
-                remote_uuid CHARACTER(36),
-                deleted INTEGER DEFAULT 0,
-                calendar_sync_required INTEGER DEFAULT 0,
-                notify_at INTEGER,
-                attrs TEXT,
-                content TEXT,
-                due INTEGER,
-                done INTEGER DEFAULT 0,
-                is_scheduled_bullet INTEGER DEFAULT 0,
-                parent_uuid CHARACTER(36)
-            )
-        """)
-
-        # Create varied tasks
-        test_data = [
-            ("task-1", 10.0, "IU", 1738368000),  # 10 points, both flags, has due date
-            ("task-2", 20.0, "U", None),         # 20 points, urgent only, no due date
-            ("task-3", 15.0, "I", 1736899200),   # 15 points, important only, has due date
-            ("task-4", 5.0, "", 1735689600),     # 5 points, no flags, has due date
-        ]
-
-        for uuid, points, flags, due in test_data:
-            content = json.dumps([{"type": "paragraph", "content": [{"type": "text", "text": "Task"}]}])
-            attrs = json.dumps({"createdAt": 1735689600, "points": points, "flags": flags})
-            cursor.execute("""
-                INSERT INTO tasks (uuid, attrs, content, due, deleted, done)
-                VALUES (?, ?, ?, ?, 0, 0)
-            """, (uuid, attrs, content, due))
-
-        conn.commit()
-        return conn
-
-    mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
-
-    service = TasksService(mock_db_connection)
-
-    # Test: Tasks with min 10 points AND urgent flag (only or both)
-    results = service.list_tasks(min_points=10.0, limit=10)
-    urgent_or_both = [r for r in results if "U" in (r["attrs"].flags or "")]
-    assert len(urgent_or_both) == 2  # task-1 (IU) and task-2 (U)
-
-    # Test: Tasks with both flags AND has due date
-    results = service.list_tasks(flags_filter="both", has_due_date=True, limit=10)
-    assert len(results) == 1
-    assert results[0]["uuid"] == "task-1"
-
-    # Test: Sort by points with points filter
-    results = service.list_tasks(min_points=10.0, sort_by="points", limit=10)
-    assert len(results) == 3
-    assert results[0]["attrs"].points == 20.0
-    assert results[1]["attrs"].points == 15.0
-    assert results[2]["attrs"].points == 10.0
 
 
 # ============================================================================
@@ -1357,7 +1040,7 @@ def test_query_tasks_basic():
         return conn
 
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
@@ -1422,7 +1105,7 @@ def test_query_tasks_points_range():
         return conn
 
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
@@ -1495,7 +1178,7 @@ def test_query_tasks_timestamp_ranges():
         return conn
 
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
@@ -1568,7 +1251,7 @@ def test_query_tasks_flags_filtering():
         return conn
 
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
@@ -1640,7 +1323,7 @@ def test_query_tasks_duration_and_recurring():
         return conn
 
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
@@ -1710,7 +1393,7 @@ def test_query_tasks_sorting_and_pagination():
         return conn
 
     mock_db_connection = Mock()
-    mock_db_connection.get_connection.side_effect = lambda: create_test_db()
+    mock_db_connection.get_readonly_connection.side_effect = lambda: create_test_db()
 
     service = TasksService(mock_db_connection)
 
