@@ -12,6 +12,7 @@ from .config import Settings
 from .database import DatabaseConnection
 from .notes import NotesService
 from .tasks import TasksService
+from .mcp_app import MCPApp
 
 
 class Container(containers.DeclarativeContainer):
@@ -52,4 +53,10 @@ class Container(containers.DeclarativeContainer):
     tasks_service = providers.Factory(
         TasksService,
         db_connection=db_connection,
+    )
+
+    mcp_app = providers.Factory(
+        MCPApp,
+        notes_service,
+        tasks_service,
     )

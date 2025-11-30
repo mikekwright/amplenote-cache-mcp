@@ -17,7 +17,7 @@ from app.database import DatabaseConnection
 def test_database_connection_success(test_settings):
     """Test successful database connection using dependency injection."""
     db_conn = DatabaseConnection(test_settings)
-    conn = db_conn.get_connection()
+    conn = db_conn.get_readonly_connection()
     assert conn is not None
 
     # Verify we can execute a query
@@ -35,7 +35,7 @@ def test_database_connection_missing_file():
     db_conn = DatabaseConnection(settings)
 
     with pytest.raises(FileNotFoundError) as exc_info:
-        db_conn.get_connection()
+        db_conn.get_readonly_connection()
 
     assert "Amplenote database not found" in str(exc_info.value)
 
@@ -70,7 +70,7 @@ def test_database_connection_settings_injection():
 def test_database_connection_readonly_mode(test_settings):
     """Test that database connections are opened in read-only mode."""
     db_conn = DatabaseConnection(test_settings)
-    conn = db_conn.get_connection()
+    conn = db_conn.get_readonly_connection()
 
     # Try to create a table - this should fail in read-only mode
     cursor = conn.cursor()

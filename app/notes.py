@@ -1,44 +1,21 @@
 """
 Note-related tools for Amplenote MCP Server.
 """
+import logging
 
 from .database import DatabaseConnection
 from .models import Note, NoteBasic, NoteReference, NoteReferences, NoteSearchResult, NoteWithTimestamp
 
 
+logger = logging.getLogger(__name__)
+
+
 class NotesService:
-    """
-    Service class for note-related operations.
-
-    This class encapsulates all note-related business logic and database queries.
-    It follows dependency injection principles by accepting a DatabaseConnection
-    instance rather than creating database connections directly.
-
-    Args:
-        db_connection: Database connection factory for creating connections
-    """
-
     def __init__(self, db_connection: DatabaseConnection):
-        """
-        Initialize the notes service.
-
-        Args:
-            db_connection: Database connection factory
-        """
         self.db_connection = db_connection
 
-    def search_notes(self, query: str, limit: int = 10) -> list[NoteSearchResult]:
-        """
-        Search notes using full-text search.
-
-        Args:
-            query: Search query string
-            limit: Maximum number of results to return (default: 10)
-
-        Returns:
-            List of matching notes with uuid, name, and snippet
-        """
-        conn = self.db_connection.get_connection()
+    def search_notes(self, query: str, limit: int = 10, offset: int = 0) -> list[NoteSearchResult]:
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         # Use FTS4 virtual table for full-text search
@@ -47,8 +24,8 @@ class NotesService:
             FROM notes_search_index
             JOIN notes n ON notes_search_index.docid = n.rowid
             WHERE notes_search_index MATCH ?
-            LIMIT ?
-        """, (query, limit))
+            LIMIT ? OFFSET ?
+        """, (query, limit, offset))
 
         results = []
         for row in cursor.fetchall():
@@ -61,17 +38,8 @@ class NotesService:
         conn.close()
         return results
 
-    def get_note_by_uuid(self, uuid: str) -> Note | dict[str, str]:
-        """
-        Get the full content of a note by its UUID.
-
-        Args:
-            uuid: The remote_uuid of the note
-
-        Returns:
-            Note details including name, text, and metadata
-        """
-        conn = self.db_connection.get_connection()
+    def get_note_by_uuid(self, uuid: str) -> Note | None:
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -84,7 +52,8 @@ class NotesService:
         conn.close()
 
         if not row:
-            return {"error": f"Note with UUID {uuid} not found"}
+            logger.info("Note with UUID %s not found", uuid)
+            return None
 
         return {
             "remote_uuid": row[0],
@@ -96,17 +65,8 @@ class NotesService:
             "remote_digest": row[6]
         }
 
-    def get_note_by_name(self, name: str) -> Note | dict[str, str]:
-        """
-        Get the full content of a note by its name.
-
-        Args:
-            name: The name of the note (case-insensitive partial match)
-
-        Returns:
-            Note details including uuid, text, and metadata
-        """
-        conn = self.db_connection.get_connection()
+    def get_note_by_name(self, name: str) -> Note | None:
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -120,7 +80,8 @@ class NotesService:
         conn.close()
 
         if not row:
-            return {"error": f"Note with name containing '{name}' not found"}
+            logger.info("Note with name containing %s not found", name)
+            return None
 
         return {
             "remote_uuid": row[0],
@@ -134,16 +95,9 @@ class NotesService:
 
     def list_notes(self, limit: int = 20, offset: int = 0) -> list[NoteBasic]:
         """
-        List all notes with pagination.
-
-        Args:
-            limit: Maximum number of notes to return (default: 20)
-            offset: Number of notes to skip (default: 0)
-
-        Returns:
-            List of notes with uuid and name
+        List all notes with pagination ordered by last change.
         """
-        conn = self.db_connection.get_connection()
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -164,49 +118,8 @@ class NotesService:
         conn.close()
         return results
 
-    def get_recently_modified_notes(self, limit: int = 20) -> list[NoteWithTimestamp]:
-        """
-        Get the most recently modified notes.
-
-        Args:
-            limit: Maximum number of notes to return (default: 20)
-
-        Returns:
-            List of recently modified notes with uuid, name, and modification timestamp
-        """
-        conn = self.db_connection.get_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT remote_uuid, local_uuid, name, updated_at
-            FROM notes
-            ORDER BY updated_at DESC
-            LIMIT ?
-        """, (limit,))
-
-        results = []
-        for row in cursor.fetchall():
-            results.append({
-                "remote_uuid": row[0],
-                "local_uuid": row[1],
-                "name": row[2],
-                "updated_at": row[3]
-            })
-
-        conn.close()
-        return results
-
-    def get_note_references(self, uuid: str) -> NoteReferences:
-        """
-        Get all notes that reference a given note, and all notes it references.
-
-        Args:
-            uuid: The UUID of the note to check references for
-
-        Returns:
-            Dictionary with 'referenced_by' and 'references' lists
-        """
-        conn = self.db_connection.get_connection()
+    def get_note_references(self, reference_note_uuid: str) -> NoteReferences:
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         # Notes that reference this note
@@ -215,7 +128,7 @@ class NotesService:
             FROM note_references nr
             LEFT JOIN notes n ON nr.local_uuid = n.local_uuid
             WHERE nr.referenced_uuid = ?
-        """, (uuid,))
+        """, (reference_note_uuid,))
 
         referenced_by = []
         for row in cursor.fetchall():
@@ -230,7 +143,7 @@ class NotesService:
             FROM note_references nr
             LEFT JOIN notes n ON nr.referenced_uuid = n.local_uuid
             WHERE nr.local_uuid = ?
-        """, (uuid,))
+        """, (reference_note_uuid,))
 
         references = []
         for row in cursor.fetchall():

@@ -11,9 +11,6 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-_settings: "Settings | None" = None
-
-
 class Settings(BaseSettings):
     """
     Application settings with environment variable support.
@@ -56,10 +53,3 @@ class Settings(BaseSettings):
         ge=1,
         description="Maximum allowed query limit"
     )
-
-
-def get_settings() -> Settings:
-    global _settings
-    if _settings is None:
-        _settings = Settings()
-    return _settings

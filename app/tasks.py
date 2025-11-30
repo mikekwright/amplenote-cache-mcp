@@ -1,47 +1,18 @@
-"""
-Task-related tools for Amplenote MCP Server.
-"""
-
 from typing import Optional, Literal
 from datetime import datetime
 import json
 from pydantic import ValidationError
 
 from .database import DatabaseConnection
-from .models import Task, TaskWithTimestamp, TaskAttrs, TaskContent, TaskQuery
+from .models import Task, TaskAttrs, TaskContent, TaskQuery
 
 
 class TasksService:
-    """
-    Service class for task-related operations.
-
-    This class encapsulates all task-related business logic and database queries.
-    It follows dependency injection principles by accepting a DatabaseConnection
-    instance rather than creating database connections directly.
-
-
-    Task Schema (2025-11-29):
-        sqlite> PRAGMA table_info(tasks);
-        0|id|INTEGER|0||1
-        1|uuid|CHARACTER(36)|1||0
-        2|local_uuid|CHARACTER(36)|0||0
-        3|remote_uuid|CHARACTER(36)|0||0
-        4|deleted|INTEGER|1|0|0
-        5|calendar_sync_required|INTEGER|1|0|0
-        6|notify_at|INTEGER|0||0
-        7|attrs|TEXT|0||0
-        8|content|TEXT|0||0
-        9|due|INTEGER|0||0
-        10|done|INTEGER|1|0|0
-        11|is_scheduled_bullet|INTEGER|1|0|0
-        12|parent_uuid|CHARACTER(36)|0||0
-    """
     def __init__(self, db_connection: DatabaseConnection):
         self.db_connection = db_connection
 
     @staticmethod
     def _parse_task_attrs(attrs_json: str | None) -> TaskAttrs | None:
-        """Parse task attributes JSON string into TaskAttrs model."""
         if not attrs_json:
             return None
         try:
@@ -54,7 +25,6 @@ class TasksService:
 
     @staticmethod
     def _parse_task_content(content_json: str | None) -> TaskContent | None:
-        """Parse task content JSON string into TaskContent model."""
         if not content_json:
             return None
         try:
@@ -69,30 +39,9 @@ class TasksService:
         self,
         query: str,
         limit: int = 20,
-        include_deleted: bool = False,
-        include_done: bool = False,
-        min_points: Optional[float] = None,
-        max_points: Optional[float] = None,
-        flags_filter: Optional[Literal["urgent", "important", "both", "none"]] = None,
-        sort_by: Optional[Literal["due", "points", "created"]] = None
+        offset: int = 0,
     ) -> list[Task]:
-        """
-        Search tasks by description/body text and return list of matched tasks.
-
-        Args:
-            query: Search query to match in task content
-            limit: Maximum number of tasks to return (default: 20)
-            include_deleted: Whether to include deleted tasks (default: False)
-            include_done: Whether to include completed tasks (default: False)
-            min_points: Minimum points value to filter by (optional)
-            max_points: Maximum points value to filter by (optional)
-            flags_filter: Filter by priority flags - "urgent", "important", "both", or "none" (optional)
-            sort_by: Sort order - "due" (default), "points", or "created" (optional)
-
-        Returns:
-            List of matching tasks with details
-        """
-        conn = self.db_connection.get_connection()
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         sql_query = """
@@ -104,46 +53,19 @@ class TasksService:
         """
         params = [f"%{query}%"]
 
-        if not include_deleted:
-            sql_query += " AND (deleted IS NULL OR deleted = 0)"
+        # if not include_deleted:
+        #     sql_query += " AND (deleted IS NULL OR deleted = 0)"
+        #
+        # if not include_done:
+        #     sql_query += " AND (done IS NULL OR done = 0)"
 
-        if not include_done:
-            sql_query += " AND (done IS NULL OR done = 0)"
-
+        sql_query += "LIMIT ? OFFSET ?"
+        params.extend([str(limit), str(offset)])
         cursor.execute(sql_query, params)
 
         # Fetch and parse results
         results = []
         for row in cursor.fetchall():
-            attrs = self._parse_task_attrs(row[7])
-
-            # Apply points filters
-            if min_points is not None:
-                if not attrs or attrs.points is None or attrs.points < min_points:
-                    continue
-            if max_points is not None:
-                if not attrs or attrs.points is None or attrs.points > max_points:
-                    continue
-
-            # Apply flags filter
-            if flags_filter is not None:
-                flags = attrs.flags if attrs and attrs.flags else ""
-                has_urgent = "U" in flags
-                has_important = "I" in flags
-
-                should_include = False
-                if flags_filter == "urgent":
-                    should_include = has_urgent and not has_important
-                elif flags_filter == "important":
-                    should_include = has_important and not has_urgent
-                elif flags_filter == "both":
-                    should_include = has_urgent and has_important
-                elif flags_filter == "none":
-                    should_include = not has_urgent and not has_important
-
-                if not should_include:
-                    continue
-
             results.append({
                 "id": row[0],
                 "uuid": row[1],
@@ -152,7 +74,7 @@ class TasksService:
                 "deleted": False if row[4] == 0 else True,
                 "calendar_sync_required": False if row[5] == 0 else True,
                 "notify_at": None if row[6] is None or row[6] == 0 else datetime.fromtimestamp(row[6]),
-                "attrs": attrs,
+                "attrs": self._parse_task_attrs(row[7]),
                 "content": self._parse_task_content(row[8]),
                 "due": None if row[9] is None or row[9] == 0 else datetime.fromtimestamp(row[9]),
                 "done": False if row[10] == 0 else True,
@@ -160,48 +82,17 @@ class TasksService:
                 "parent_uuid": row[12],
             })
 
-        # Apply sorting
-        if sort_by == "points":
-            results.sort(key=lambda x: x["attrs"].points if x["attrs"] and x["attrs"].points else 0, reverse=True)
-        elif sort_by == "created":
-            results.sort(key=lambda x: x["attrs"].created_at if x["attrs"] and x["attrs"].created_at else 0, reverse=True)
-        else:  # Default to "due" or when sort_by is None
-            results.sort(key=lambda x: x["due"].timestamp() if x["due"] else float('inf'))
-
-        # Apply limit
-        results = results[:limit]
-
         conn.close()
         return results
 
     def list_tasks(
         self,
         limit: int = 20,
+        offset: int = 0,
         include_deleted: bool = False,
         include_done: bool = False,
-        has_due_date: Optional[bool] = None,
-        min_points: Optional[float] = None,
-        max_points: Optional[float] = None,
-        flags_filter: Optional[Literal["urgent", "important", "both", "none"]] = None,
-        sort_by: Optional[Literal["due", "points", "created"]] = None
     ) -> list[Task]:
-        """
-        List tasks with optional filtering.
-
-        Args:
-            limit: Maximum number of tasks to return (default: 20)
-            include_deleted: Whether to include deleted tasks (default: False)
-            include_done: Whether to include completed tasks (default: False)
-            has_due_date: Filter tasks with/without due dates (optional)
-            min_points: Minimum points value to filter by (optional)
-            max_points: Maximum points value to filter by (optional)
-            flags_filter: Filter by priority flags - "urgent", "important", "both", or "none" (optional)
-            sort_by: Sort order - "due" (default), "points", or "created" (optional)
-
-        Returns:
-            List of tasks with details
-        """
-        conn = self.db_connection.get_connection()
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         query = """
@@ -211,7 +102,6 @@ class TasksService:
             FROM tasks
             WHERE 1=1
         """
-        params = []
 
         if not include_deleted:
             query += " AND (deleted IS NULL OR deleted = 0)"
@@ -219,46 +109,14 @@ class TasksService:
         if not include_done:
             query += " AND (done IS NULL OR done = 0)"
 
-        if has_due_date is not None:
-            if has_due_date:
-                query += " AND due IS NOT NULL"
-            else:
-                query += " AND due IS NULL"
+        query += "ORDER BY attrs->>'createdAt' LIMIT ? OFFSET ?"
+        params = [limit, offset]
 
         cursor.execute(query, params)
 
         # Fetch and parse results with filtering
         results = []
         for row in cursor.fetchall():
-            attrs = self._parse_task_attrs(row[7])
-
-            # Apply points filters
-            if min_points is not None:
-                if not attrs or attrs.points is None or attrs.points < min_points:
-                    continue
-            if max_points is not None:
-                if not attrs or attrs.points is None or attrs.points > max_points:
-                    continue
-
-            # Apply flags filter
-            if flags_filter is not None:
-                flags = attrs.flags if attrs and attrs.flags else ""
-                has_urgent = "U" in flags
-                has_important = "I" in flags
-
-                should_include = False
-                if flags_filter == "urgent":
-                    should_include = has_urgent and not has_important
-                elif flags_filter == "important":
-                    should_include = has_important and not has_urgent
-                elif flags_filter == "both":
-                    should_include = has_urgent and has_important
-                elif flags_filter == "none":
-                    should_include = not has_urgent and not has_important
-
-                if not should_include:
-                    continue
-
             results.append({
                 "id": row[0],
                 "uuid": row[1],
@@ -267,7 +125,7 @@ class TasksService:
                 "deleted": False if row[4] == 0 else True,
                 "calendar_sync_required": False if row[5] == 0 else True,
                 "notify_at": None if row[6] is None or row[6] == 0 else datetime.fromtimestamp(row[6]),
-                "attrs": attrs,
+                "attrs": self._parse_task_attrs(row[7]),
                 "content": self._parse_task_content(row[8]),
                 "due": None if row[9] is None or row[9] == 0 else datetime.fromtimestamp(row[9]),
                 "done": False if row[10] == 0 else True,
@@ -275,43 +133,8 @@ class TasksService:
                 "parent_uuid": row[12],
             })
 
-        # Apply sorting
-        if sort_by == "points":
-            results.sort(key=lambda x: x["attrs"].points if x["attrs"] and x["attrs"].points else 0, reverse=True)
-        elif sort_by == "created":
-            results.sort(key=lambda x: x["attrs"].created_at if x["attrs"] and x["attrs"].created_at else 0, reverse=True)
-        else:  # Default to "due" or when sort_by is None
-            results.sort(key=lambda x: x["due"].timestamp() if x["due"] else float('inf'))
-
-        # Apply limit
-        results = results[:limit]
-
         conn.close()
         return results
-
-    def get_recently_modified_tasks(self, limit: int = 20, include_deleted: bool = False, include_done: bool = False) -> list[Task]:
-        """
-        Get the most recently created tasks (sorted by createdAt from attrs).
-
-        Note: This function previously used updated_at which doesn't exist in the schema.
-        Now uses createdAt from the attrs JSON field instead.
-
-        Args:
-            limit: Maximum number of tasks to return (default: 20)
-            include_deleted: Whether to include deleted tasks (default: False)
-            include_done: Whether to include completed tasks (default: False)
-
-        Returns:
-            List of recently created tasks with details, ordered by creation date descending
-        """
-        # Reuse the get_tasks_by_created_date method which already implements this functionality
-        return self.get_tasks_by_created_date(
-            start_date=None,
-            end_date=None,
-            limit=limit,
-            include_deleted=include_deleted,
-            include_done=include_done
-        )
 
     def get_tasks_by_note(self, note_uuid: str, include_deleted: bool = False, include_done: bool = False) -> list[Task]:
         """
@@ -326,7 +149,7 @@ class TasksService:
         Returns:
             List of tasks that mention this note
         """
-        conn = self.db_connection.get_connection()
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         query = """
@@ -390,7 +213,7 @@ class TasksService:
         Returns:
             List of tasks created within the date range, ordered by creation date descending
         """
-        conn = self.db_connection.get_connection()
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         query = """
@@ -469,7 +292,7 @@ class TasksService:
         Returns:
             List of tasks ordered by points
         """
-        conn = self.db_connection.get_connection()
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         query = """
@@ -546,7 +369,7 @@ class TasksService:
         Returns:
             List of tasks matching the priority filter criteria
         """
-        conn = self.db_connection.get_connection()
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         query = """
@@ -625,7 +448,7 @@ class TasksService:
         Returns:
             List of tasks matching the query criteria
         """
-        conn = self.db_connection.get_connection()
+        conn = self.db_connection.get_readonly_connection()
         cursor = conn.cursor()
 
         # Build base SQL query
@@ -832,106 +655,3 @@ class TasksService:
 
         conn.close()
         return results
-
-
-# Legacy functions for backward compatibility during migration
-# These will be removed once all code is migrated to use DI
-def search_tasks(query: str, limit: int = 20, include_deleted: bool = False) -> list[Task]:
-    """DEPRECATED: Use TasksService.search_tasks instead."""
-    from .database import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    sql_query = "SELECT id, uuid, body, due, duration, notify, points, priority, start_at, deleted FROM tasks WHERE body LIKE ?"
-    params = [f"%{query}%"]
-    if not include_deleted:
-        sql_query += " AND (deleted IS NULL OR deleted = 0)"
-    sql_query += " ORDER BY priority DESC, due ASC LIMIT ?"
-    params.append(limit)
-    cursor.execute(sql_query, params)
-    results = []
-    for row in cursor.fetchall():
-        results.append({
-            "id": row[0], "uuid": row[1], "body": row[2], "due": row[3], "duration": row[4],
-            "notify": row[5], "points": row[6], "priority": row[7], "start_at": row[8], "deleted": row[9]
-        })
-    conn.close()
-    return results
-
-
-def list_tasks(
-    limit: int = 20,
-    include_deleted: bool = False,
-    priority: Optional[int] = None,
-    has_due_date: Optional[bool] = None
-) -> list[Task]:
-    """DEPRECATED: Use TasksService.list_tasks instead."""
-    from .database import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    query = "SELECT id, uuid, body, due, duration, notify, points, priority, start_at, deleted FROM tasks WHERE 1=1"
-    params = []
-    if not include_deleted:
-        query += " AND (deleted IS NULL OR deleted = 0)"
-    if priority is not None:
-        query += " AND priority = ?"
-        params.append(priority)
-    if has_due_date is not None:
-        if has_due_date:
-            query += " AND due IS NOT NULL"
-        else:
-            query += " AND due IS NULL"
-    query += " ORDER BY priority DESC, due ASC LIMIT ?"
-    params.append(limit)
-    cursor.execute(query, params)
-    results = []
-    for row in cursor.fetchall():
-        results.append({
-            "id": row[0], "uuid": row[1], "body": row[2], "due": row[3], "duration": row[4],
-            "notify": row[5], "points": row[6], "priority": row[7], "start_at": row[8], "deleted": row[9]
-        })
-    conn.close()
-    return results
-
-
-def get_recently_modified_tasks(limit: int = 20, include_deleted: bool = False) -> list[TaskWithTimestamp]:
-    """DEPRECATED: Use TasksService.get_recently_modified_tasks instead."""
-    from .database import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    query = "SELECT id, uuid, body, due, duration, notify, points, priority, start_at, deleted, updated_at FROM tasks WHERE 1=1"
-    params = []
-    if not include_deleted:
-        query += " AND (deleted IS NULL OR deleted = 0)"
-    query += " ORDER BY updated_at DESC LIMIT ?"
-    params.append(limit)
-    cursor.execute(query, params)
-    results = []
-    for row in cursor.fetchall():
-        results.append({
-            "id": row[0], "uuid": row[1], "body": row[2], "due": row[3], "duration": row[4],
-            "notify": row[5], "points": row[6], "priority": row[7], "start_at": row[8],
-            "deleted": row[9], "updated_at": row[10]
-        })
-    conn.close()
-    return results
-
-
-def get_tasks_by_note(note_uuid: str) -> list[Task]:
-    """DEPRECATED: Use TasksService.get_tasks_by_note instead."""
-    from .database import get_db_connection
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, uuid, body, due, duration, notify, points, priority, start_at, deleted
-        FROM tasks
-        WHERE body LIKE ?
-        ORDER BY priority DESC, due ASC
-    """, (f"%{note_uuid}%",))
-    results = []
-    for row in cursor.fetchall():
-        results.append({
-            "id": row[0], "uuid": row[1], "body": row[2], "due": row[3], "duration": row[4],
-            "notify": row[5], "points": row[6], "priority": row[7], "start_at": row[8], "deleted": row[9]
-        })
-    conn.close()
-    return results
